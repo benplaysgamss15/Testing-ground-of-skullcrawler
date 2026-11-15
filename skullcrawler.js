@@ -168,8 +168,10 @@ export class RoarSynth {
 export class SkullcrawlerModel {
   constructor({ maxAnisotropy = 4 } = {}) {
     this.group = new THREE.Group();
-    const tx = createReptileTextures(384, maxAnisotropy);
-    this.skinMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: tx.map, bumpMap: tx.bumpMap, bumpScale: 0.032, roughnessMap: tx.roughnessMap, roughness: 0.85, metalness: 0.04 });
+ const tx = createReptileTextures(512, maxAnisotropy);
+    const bTx = createBoneTextures(384, maxAnisotropy);
+    this.skinMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: tx.map, normalMap: tx.normalMap, normalScale: new THREE.Vector2(1.25, 1.25), roughnessMap: tx.roughnessMap, roughness: 0.95, metalness: 0.03 });
+    this.boneMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: bTx.map, normalMap: bTx.normalMap, normalScale: new THREE.Vector2(0.85, 0.85), roughnessMap: bTx.roughnessMap, roughness: 0.92, metalness: 0.02 });
     this.toothMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.05 });
     this.wetMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.20, metalness: 0.02 });
     this.L1 = 0.88; this.L2 = 1.52;
