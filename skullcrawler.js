@@ -566,14 +566,15 @@ export class SkullcrawlerModel {
           const delt = 0.056 * Math.exp(-0.5 * ((s - 0.16) / 0.09) ** 2), bicep = 0.036 * Math.exp(-0.5 * ((s - 0.30) / 0.085) ** 2), foreB = 0.035 * Math.exp(-0.5 * ((s - 0.56) / 0.10) ** 2);
           const rO = 0.04 + 0.185 * (1 - 0.50 * s) + delt + bicep + foreB;
           const rL = 0.04 + 0.175 * (1 - 0.48 * s) + delt * 0.9 + bicep * 0.8 + foreB * 0.7;
-          const spurRidge = Math.exp(-0.5 * ((s - 0.44) / 0.042) ** 2), fEnv = smoothstep(0.48, 0.58, s) * (1 - smoothstep(0.76, 0.88, s)), sW = Math.sin(s * Math.PI * 56);
-          const ridge = spurRidge * (Math.max(0, (cT - 0.45) / 0.55) ** 1.8);
+          const spurRidge = Math.exp(-0.5 * ((s - 0.44) / 0.068) ** 2), fEnv = smoothstep(0.47, 0.57, s) * (1 - smoothstep(0.76, 0.88, s)), sW = Math.sin(s * Math.PI * 26);
+          const ridge = spurRidge * (Math.max(0, (cT - 0.32) / 0.68) ** 1.6);
           const innerTuck = 1 - 0.14 * Math.exp(-0.5 * ((s - 0.44) / 0.075) ** 2) * Math.max(0, -cT);
-          const ro = rO * cT * innerTuck + 0.11 * ridge + 0.022 * fEnv * sW * Math.max(0, cT);
-          const rl = rL * sT * (1 - 0.35 * ridge);
+          const scuteBump = Math.pow(0.5 + 0.5 * sW, 1.4) - 0.32;
+          const ro = rO * cT * innerTuck + 0.135 * ridge + 0.013 * fEnv * scuteBump * (Math.max(0, cT) ** 1.35);
+          const rl = rL * sT * (1 - 0.32 * ridge);
           const p = pts[k].clone().addScaledVector(outD, ro).addScaledVector(latD, rl);
-          const bt = fEnv > 0 && cT > -0.15 ? Math.max(0, sW) * fEnv * Math.max(0, (cT + 0.15) / 1.15) : 0;
-          return { p, c: [lerp(0.21, 0.50, 0.68 * bt), lerp(0.23, 0.48, 0.68 * bt), lerp(0.19, 0.39, 0.68 * bt)] };
+          const bt = fEnv > 0 && cT > -0.10 ? Math.max(0, 0.5 + 0.5 * sW) * fEnv * Math.max(0, (cT + 0.10) / 1.10) : 0;
+          return { p, c: [lerp(0.21, 0.39, 0.58 * bt), lerp(0.23, 0.38, 0.58 * bt), lerp(0.19, 0.32, 0.58 * bt)] };
         }
 
         const handBell = smoothstep(0.32, 0.72, uHand) * (1 - 0.18 * smoothstep(0.82, 0.96, uHand));
