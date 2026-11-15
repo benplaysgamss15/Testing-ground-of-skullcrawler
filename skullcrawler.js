@@ -24,35 +24,112 @@ function noise2(x, y) {
 }
 const fbm = (x, y) => 0.55 * noise2(x, y) + 0.30 * noise2(x * 2.1, y * 2.1) + 0.15 * noise2(x * 4.3, y * 4.3);
 
-function createReptileTextures(size = 384, anisotropy = 4) {
+const pNoise = (u, v, p) => {
+  const gx = u * p, gy = v * p, ix = Math.floor(gx), iy = Math.floor(gy), fx = gx - ix, fy = gy - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const i0 = ((ix % p) + p) % p, j0 = ((iy % p) + p) % p, i1 = (i0 + 1) % p, j1 = (j0 + 1) % p;
+  return lerp(lerp(hash2(i0, j0), hash2(i1, j0), ux), lerp(hash2(i0, j1), hash2(i1, j1), ux), uy);
+};
+const pFbm = (u, v, p = 8) => 0.55 * pNoise(u, v, p) + 0.30 * pNoise(u, v, p * 2) + 0.15 * pNoise(u, v, p * 4);
+
+function buildNormalMap(hBuf, size, strength) {
+  const nc = document.createElement('canvas'); nc.width = nc.height = size;
+  const nCtx = nc.getContext('2d'), nImg = nCtx.createImageData(size, size);
+  for (let py = 0; py < size; py++) {
+    const pyU = (py - 1 + size) % size, pyD = (py + 1) % size;
+    for (let px = 0; px < size; px++) {
+      const hL = hBuf[py * size + ((px - 1 + size) % size)];
+      const hR = hBuf[py * size + ((px + 1) % size)];
+      const hU = hBuf[pyU * size + px];
+      const hD = hBuf[pyD * size + px];
+      const nx = -(hR - hL) * strength, ny = (hD - hU) * strength, nz = 1.0;
+      const inv = 1 / Math.hypot(nx, ny, nz), i = (py * size + px) * 4;
+      nImg.data[i]     = Math.round((nx * inv * 0.5 + 0.5) * 255);
+      nImg.data[i + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+      nImg.data[i + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+      nImg.data[i + 3] = 255;
+    }
+  }
+  nCtx.putImageData(nImg, 0, 0);
+  return nc;
+}
+
+function createReptileTextures(size = 512, anisotropy = 4) {
   const mk = () => { const c = document.createElement('canvas'); c.width = c.height = size; return [c, c.getContext('2d')]; };
-  const [dc, dCtx] = mk(), [bc, bCtx] = mk(), [rc, rCtx] = mk();
-  const dImg = dCtx.createImageData(size, size), bImg = bCtx.createImageData(size, size), rImg = rCtx.createImageData(size, size);
-  const cells = 24, pts = [];
+  const [dc, dCtx] = mk(), [rc, rCtx] = mk();
+  const dImg = dCtx.createImageData(size, size), rImg = rCtx.createImageData(size, size);
+  const hBuf = new Float32Array(size * size);
+  const cells = 22, pts = [];
   for (let cy = 0; cy < cells; cy++) for (let cx = 0; cx < cells; cx++)
-    pts.push({ x: cx + 0.18 + 0.64 * hash2(cx, cy), y: cy + 0.18 + 0.64 * hash2(cx + 97, cy + 53) });
+    pts.push({ x: cx + 0.16 + 0.68 * hash2(cx, cy), y: cy + 0.16 + 0.68 * hash2(cx + 97, cy + 53) });
 
   for (let py = 0; py < size; py++) {
     const v = py / size;
     for (let px = 0; px < size; px++) {
-      const u = px / size, gx = u * cells, gy = v * cells, icx = Math.floor(gx), icy = Math.floor(gy);
+      const u = px / size;
+      const m1 = pFbm(u, v, 6), m2 = pFbm(u + 0.37, v + 0.61, 22);
+      const uw = ((u + (m1 - 0.5) * 0.028) % 1 + 1) % 1;
+      const vw = ((v + (m2 - 0.5) * 0.020) % 1 + 1) % 1;
+      const gx = uw * cells, gy = vw * cells, icx = Math.floor(gx), icy = Math.floor(gy);
       let d1 = 9e9, d2 = 9e9;
       for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
         const wx = (icx + ox + cells) % cells, wy = (icy + oy + cells) % cells, pt = pts[wy * cells + wx];
         const dist = Math.hypot((pt.x + (icx + ox - wx)) - gx, (pt.y + (icy + oy - wy)) - gy);
         if (dist < d1) { d2 = d1; d1 = dist; } else if (dist < d2) d2 = dist;
       }
-      const dome = Math.pow(clamp((d2 - d1) * 2.2, 0, 1), 0.55), m = fbm(u * 14, v * 14);
-      const fold = Math.sin(u * Math.PI * 36 + m * 3.0) * 0.5 + 0.5, i = (py * size + px) * 4;
-      const t = Math.round(clamp(0.78 + 0.20 * dome + 0.10 * m - 0.06 * fold, 0.68, 1.0) * 255);
-      dImg.data[i] = t; dImg.data[i+1] = Math.round(t * (0.98 + 0.02 * m)); dImg.data[i+2] = Math.round(t * (0.94 + 0.03 * m)); dImg.data[i+3] = 255;
-      bImg.data[i] = bImg.data[i+1] = bImg.data[i+2] = Math.round(clamp(dome * 0.72 + fold * 0.18 + m * 0.15, 0, 1) * 255); bImg.data[i+3] = 255;
-      rImg.data[i] = rImg.data[i+1] = rImg.data[i+2] = Math.round(clamp(0.42 + 0.30 * (1 - dome) + 0.14 * m, 0.25, 0.88) * 255); rImg.data[i+3] = 255;
+      const edge = clamp((d2 - d1) * 2.1, 0, 1);
+      const dome = Math.pow(edge, 0.42), crevice = 1 - smoothstep(0.0, 0.28, edge);
+      const fold = 0.5 + 0.5 * Math.sin(u * Math.PI * 16 + m1 * 5.0);
+      const idxP = py * size + px, i = idxP * 4;
+      hBuf[idxP] = clamp(0.56 * dome + 0.22 * m2 + 0.14 * fold + 0.08 * m1 - 0.24 * crevice, 0, 1);
+
+      const tone = clamp(0.90 + 0.12 * dome + 0.12 * (m1 - 0.5) + 0.08 * (m2 - 0.5) - 0.34 * crevice - 0.06 * (1 - fold), 0.48, 1.04);
+      dImg.data[i]     = Math.round(clamp(tone * (0.97 + 0.04 * m1), 0, 1) * 255);
+      dImg.data[i + 1] = Math.round(clamp(tone * (0.99 + 0.03 * m2), 0, 1) * 255);
+      dImg.data[i + 2] = Math.round(clamp(tone * (0.91 + 0.04 * m1), 0, 1) * 255);
+      dImg.data[i + 3] = 255;
+
+      const rough = clamp(0.62 + 0.28 * crevice + 0.14 * (1 - dome) + 0.10 * (m2 - 0.5), 0.52, 0.98);
+      rImg.data[i] = rImg.data[i + 1] = rImg.data[i + 2] = Math.round(rough * 255); rImg.data[i + 3] = 255;
     }
   }
-  dCtx.putImageData(dImg, 0, 0); bCtx.putImageData(bImg, 0, 0); rCtx.putImageData(rImg, 0, 0);
+  dCtx.putImageData(dImg, 0, 0); rCtx.putImageData(rImg, 0, 0);
+  const nc = buildNormalMap(hBuf, size, 4.2);
   const tx = (c, srgb) => { const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3, 3); t.anisotropy = anisotropy; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
-  return { map: tx(dc, true), bumpMap: tx(bc, false), roughnessMap: tx(rc, false) };
+  return { map: tx(dc, true), normalMap: tx(nc, false), roughnessMap: tx(rc, false) };
+}
+
+function createBoneTextures(size = 384, anisotropy = 4) {
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = size; return [c, c.getContext('2d')]; };
+  const [dc, dCtx] = mk(), [rc, rCtx] = mk();
+  const dImg = dCtx.createImageData(size, size), rImg = rCtx.createImageData(size, size);
+  const hBuf = new Float32Array(size * size);
+
+  for (let py = 0; py < size; py++) {
+    const v = py / size;
+    for (let px = 0; px < size; px++) {
+      const u = px / size;
+      const b1 = pFbm(u + 0.13, v + 0.41, 6), b2 = pFbm(u + 0.23, v + 0.71, 24);
+      const cNoise = pNoise(u + b1 * 0.06, v + b2 * 0.06, 8);
+      const crack = Math.pow(clamp(1 - Math.abs(cNoise - 0.5) * 18, 0, 1), 2.2);
+      const pore = smoothstep(0.75, 0.93, pNoise(u + 0.5, v + 0.2, 40));
+      const idxP = py * size + px, i = idxP * 4;
+      hBuf[idxP] = clamp(0.62 + 0.18 * b2 + 0.10 * b1 - 0.38 * crack - 0.28 * pore, 0, 1);
+
+      const tone = clamp(0.95 + 0.08 * (b1 - 0.5) + 0.05 * (b2 - 0.5) - 0.28 * crack - 0.20 * pore, 0.55, 1.0);
+      dImg.data[i]     = Math.round(tone * 255);
+      dImg.data[i + 1] = Math.round(tone * 0.98 * 255);
+      dImg.data[i + 2] = Math.round(tone * 0.93 * 255);
+      dImg.data[i + 3] = 255;
+
+      const rough = clamp(0.64 + 0.22 * (1 - b2) + 0.25 * crack + 0.20 * pore, 0.56, 0.98);
+      rImg.data[i] = rImg.data[i + 1] = rImg.data[i + 2] = Math.round(rough * 255); rImg.data[i + 3] = 255;
+    }
+  }
+  dCtx.putImageData(dImg, 0, 0); rCtx.putImageData(rImg, 0, 0);
+  const nc = buildNormalMap(hBuf, size, 2.6);
+  const tx = (c, srgb) => { const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 2); t.anisotropy = anisotropy; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
+  return { map: tx(dc, true), normalMap: tx(nc, false), roughnessMap: tx(rc, false) };
 }
 
 export class RoarSynth {
