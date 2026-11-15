@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Skullcrawler Sandbox Map</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #eef3f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1c2229; user-select: none; }
+  #canvas-wrap { position: fixed; inset: 0; touch-action: none; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  .hud-top-right {
+    position: fixed; top: 14px; right: 14px; z-index: 10;
+    display: flex; gap: 6px; align-items: center;
+  }
+  .pill-btn {
+    appearance: none; border: 1px solid rgba(28,34,41,0.12); background: rgba(255,255,255,0.88);
+    backdrop-filter: blur(12px); color: #1f2730; font-size: 12px; font-weight: 650;
+    padding: 8px 12px; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(15,23,42,0.08); transition: all 0.14s ease;
+  }
+  .pill-btn:hover { background: #fff; }
+  .pill-btn.active { background: #171d24; color: #fff; border-color: #171d24; }
+
+  .joy-zone {
+    position: fixed; left: 22px; bottom: 22px; z-index: 12;
+    width: 132px; height: 132px; border-radius: 50%; touch-action: none;
+    background: rgba(255,255,255,0.58); backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(28,34,41,0.14);
+    box-shadow: 0 10px 30px rgba(15,23,42,0.12), inset 0 1px 0 rgba(255,255,255,0.8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .joy-ring {
+    width: 82px; height: 82px; border-radius: 50%;
+    border: 1px dashed rgba(28,34,41,0.16); pointer-events: none;
+  }
+  .joy-knob {
+    position: absolute; width: 54px; height: 54px; border-radius: 50%;
+    background: linear-gradient(180deg, #ffffff 0%, #e7edf4 100%);
+    border: 1px solid rgba(28,34,41,0.18);
+    box-shadow: 0 6px 16px rgba(15,23,42,0.18);
+    pointer-events: none; will-change: transform;
+  }
+
+  .actions-right {
+    position: fixed; right: 20px; bottom: 24px; z-index: 12;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+  }
+  .action-row { display: flex; gap: 8px; }
+  .act-btn {
+    appearance: none; border: 1px solid rgba(28,34,41,0.14);
+    background: rgba(255,255,255,0.90); backdrop-filter: blur(12px); color: #1a2129;
+    font-size: 13px; font-weight: 700; min-width: 78px; padding: 13px 16px;
+    border-radius: 14px; cursor: pointer; touch-action: manipulation;
+    box-shadow: 0 8px 22px rgba(15,23,42,0.10); transition: transform 0.1s ease, background 0.14s ease, color 0.14s ease;
+  }
+  .act-btn:active { transform: scale(0.96); }
+  .act-btn.run.active { background: #171d24; color: #fff; border-color: #171d24; }
+  .act-btn.attack.active { background: #b45309; color: #fff; border-color: #b45309; }
+  .act-btn.scream.active { background: #a11b22; color: #fff; border-color: #a11b22; }
+
+  @media (max-width: 640px) {
+    .joy-zone { left: 16px; bottom: 18px; width: 120px; height: 120px; }
+    .joy-ring { width: 74px; height: 74px; }
+    .joy-knob { width: 48px; height: 48px; }
+    .actions-right { right: 16px; bottom: 20px; gap: 8px; }
+    .act-btn { min-width: 68px; padding: 11px 13px; font-size: 12.5px; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="canvas-wrap"></div>
+
+<div class="hud-top-right">
+  <button id="btn-pov" class="pill-btn">POV: 3rd</button>
+  <button id="btn-sound" class="pill-btn active">Sound: On</button>
+</div>
+
+<div class="joy-zone" id="joy-zone">
+  <div class="joy-ring"></div>
+  <div class="joy-knob" id="joy-knob"></div>
+</div>
+
+<div class="actions-right">
+  <div class="action-row">
+    <button id="btn-run" class="act-btn run">Run</button>
+  </div>
+  <div class="action-row">
+    <button id="btn-attack" class="act-btn attack">Attack</button>
+    <button id="btn-scream" class="act-btn scream">Scream</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { SkullcrawlerModel, RoarSynth } from './skullcrawler.js';
+
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0 || 1e-8), 0, 1); return t * t * (3 - 2 * t); };
+
+const MAP_HALF = 90;
+const TILE_SIZE = 2.0;
+
+function createWhiteTileTextures(anisotropy) {
+  const S = 512, tiles = 2, ts = S / tiles;
+  const cMap = document.createElement('canvas'); cMap.width = cMap.height = S;
+  const ctx = cMap.getContext('2d');
+  const cBump = document.createElement('canvas'); cBump.width = cBump.height = S;
+  const bCtx = cBump.getContext('2d');
+
+  const tones = ['#fdfeff', '#f7f9fc', '#f9fbfd', '#fcfdfe'];
+  for (let ty = 0; ty < tiles; ty++) {
+    for (let tx = 0; tx < tiles; tx++) {
+      const x0 = tx * ts, y0 = ty * ts;
+      ctx.fillStyle = tones[ty * tiles + tx];
+      ctx.fillRect(x0, y0, ts, ts);
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x0 + 4, y0 + ts - 4); ctx.lineTo(x0 + 4, y0 + 4); ctx.lineTo(x0 + ts - 4, y0 + 4); ctx.stroke();
+      ctx.strokeStyle = '#eef2f7';
+      ctx.beginPath(); ctx.moveTo(x0 + ts - 4, y0 + 4); ctx.lineTo(x0 + ts - 4, y0 + ts - 4); ctx.lineTo(x0 + 4, y0 + ts - 4); ctx.stroke();
+
+      bCtx.fillStyle = '#e6e6e6';
+      bCtx.fillRect(x0, y0, ts, ts);
+      bCtx.strokeStyle = '#ffffff'; bCtx.lineWidth = 3;
+      bCtx.strokeRect(x0 + 4, y0 + 4, ts - 8, ts - 8);
+    }
+  }
+  ctx.fillStyle = '#d3dce6';
+  bCtx.fillStyle = '#606060';
+  for (let k = 0; k <= tiles; k++) {
+    const p = k * ts, w = k === 0 || k === tiles ? 2 : 4, o = k === tiles ? S - 2 : Math.max(0, p - w * 0.5);
+    ctx.fillRect(o, 0, w, S); ctx.fillRect(0, o, S, w);
+    bCtx.fillRect(o, 0, w, S); bCtx.fillRect(0, o, S, w);
+  }
+
+  const repeat = (MAP_HALF * 2) / (TILE_SIZE * tiles);
+  const prep = (canvas, srgb) => {
+    const t = new THREE.CanvasTexture(canvas);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat, repeat);
+    t.anisotropy = anisotropy;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  return { map: prep(cMap, true), bumpMap: prep(cBump, false) };
+}
+
+const wrap = document.getElementById('canvas-wrap');
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+wrap.appendChild(renderer.domElement);
+
+const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef3f9);
+scene.fog = new THREE.Fog(0xeef3f9, 55, 130);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.04, 260);
+
+const skyDome = new THREE.Mesh(
+  new THREE.SphereGeometry(180, 32, 20),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'varying vec3 vP; void main(){ float h = clamp(normalize(vP).y, 0.0, 1.0); vec3 col = mix(vec3(0.933, 0.953, 0.976), vec3(0.79, 0.87, 0.95), pow(max(h, 1e-4), 0.6)); gl_FragColor = vec4(col, 1.0); }',
+  })
+);
+scene.add(skyDome);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0xdbe3ed, 0.95));
+
+const SHADOW_RANGE = 15;
+const SHADOW_RES = 2048;
+const sunOffset = new THREE.Vector3(10, 16, 8);
+const sun = new THREE.DirectionalLight(0xfffaf2, 2.05);
+sun.position.copy(sunOffset);
+sun.castShadow = true;
+sun.shadow.mapSize.set(SHADOW_RES, SHADOW_RES);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 48;
+sun.shadow.camera.left = sun.shadow.camera.bottom = -SHADOW_RANGE;
+sun.shadow.camera.right = sun.shadow.camera.top = SHADOW_RANGE;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.022;
+scene.add(sun);
+scene.add(sun.target);
+
+const fill = new THREE.DirectionalLight(0xe5eef8, 0.78); fill.position.set(-10, 7, -8); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xffffff, 0.62); rim.position.set(0, 6, -14); scene.add(rim);
+
+const tileTx = createWhiteTileTextures(maxAniso);
+const floorGeo = new THREE.PlaneGeometry(MAP_HALF * 2, MAP_HALF * 2).rotateX(-Math.PI / 2);
+const floorMat = new THREE.MeshStandardMaterial({
+  map: tileTx.map, bumpMap: tileTx.bumpMap, bumpScale: 0.015,
+  roughness: 0.84, metalness: 0.02,
+});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.receiveShadow = true;
+scene.add(floor);
+
+const curbMat = new THREE.MeshStandardMaterial({ color: 0xe6ecf3, roughness: 0.65, metalness: 0.03 });
+const curbH = 0.65, curbW = 1.6, curbLen = MAP_HALF * 2 + curbW * 2;
+const addCurb = (w, h, d, x, y, z) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), curbMat);
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; scene.add(m);
+};
+addCurb(curbLen, curbH, curbW, 0, curbH * 0.5, MAP_HALF + curbW * 0.5);
+addCurb(curbLen, curbH, curbW, 0, curbH * 0.5, -MAP_HALF - curbW * 0.5);
+addCurb(curbW, curbH, MAP_HALF * 2, MAP_HALF + curbW * 0.5, curbH * 0.5, 0);
+addCurb(curbW, curbH, MAP_HALF * 2, -MAP_HALF - curbW * 0.5, curbH * 0.5, 0);
+
+const skullcrawler = new SkullcrawlerModel({ maxAnisotropy: maxAniso });
+scene.add(skullcrawler.group);
+
+const roar = new RoarSynth();
+skullcrawler.onScreamPeak = () => roar.trigger();
+
+const btnRun = document.getElementById('btn-run');
+const btnAttack = document.getElementById('btn-attack');
+const btnScream = document.getElementById('btn-scream');
+const btnPov = document.getElementById('btn-pov');
+const btnSound = document.getElementById('btn-sound');
+
+let runToggle = false;
+let povMode = '3rd';
+
+const setRunToggle = (v) => {
+  runToggle = v;
+  btnRun.classList.toggle('active', runToggle);
+};
+btnRun.addEventListener('click', () => { roar.unlock(); setRunToggle(!runToggle); });
+
+skullcrawler.onAttackEnd = () => btnAttack.classList.remove('active');
+skullcrawler.onScreamEnd = () => btnScream.classList.remove('active');
+
+const triggerAttackAction = () => {
+  roar.unlock();
+  if (skullcrawler.triggerAttack()) {
+    btnAttack.classList.add('active');
+    btnScream.classList.remove('active');
+  }
+};
+const triggerScreamAction = () => {
+  roar.unlock();
+  if (skullcrawler.triggerScream()) {
+    btnScream.classList.add('active');
+    btnAttack.classList.remove('active');
+  }
+};
+btnAttack.addEventListener('click', triggerAttackAction);
+btnScream.addEventListener('click', triggerScreamAction);
+
+const togglePov = () => {
+  povMode = povMode === '3rd' ? '1st' : '3rd';
+  btnPov.textContent = povMode === '3rd' ? 'POV: 3rd' : 'POV: 1st';
+  btnPov.classList.toggle('active', povMode === '1st');
+  camOrbitYaw = 0;
+  camOrbitPitch = povMode === '3rd' ? 0.30 : -0.03;
+  camSnap = true;
+};
+btnPov.addEventListener('click', togglePov);
+
+btnSound.addEventListener('click', () => {
+  roar.setEnabled(!roar.on);
+  btnSound.classList.toggle('active', roar.on);
+  btnSound.textContent = roar.on ? 'Sound: On' : 'Sound: Off';
+});
+
+const joyZone = document.getElementById('joy-zone');
+const joyKnob = document.getElementById('joy-knob');
+let joyPointerId = null, joyCenter = { x: 0, y: 0 }, joyMaxR = 44;
+let joyX = 0, joyY = 0, lastBackTurnSign = 0;
+
+const updateJoyVisual = () => {
+  joyKnob.style.transform = `translate3d(${joyX * joyMaxR}px, ${-joyY * joyMaxR}px, 0)`;
+};
+const updateJoyFromEvent = (e) => {
+  const dx = e.clientX - joyCenter.x;
+  const dy = -(e.clientY - joyCenter.y);
+  const len = Math.hypot(dx, dy);
+  const scale = len > joyMaxR ? joyMaxR / len : 1;
+  joyX = (dx * scale) / joyMaxR;
+  joyY = (dy * scale) / joyMaxR;
+  updateJoyVisual();
+};
+
+joyZone.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  roar.unlock();
+  joyPointerId = e.pointerId;
+  joyZone.setPointerCapture(e.pointerId);
+  const rect = joyZone.getBoundingClientRect();
+  joyCenter.x = rect.left + rect.width * 0.5;
+  joyCenter.y = rect.top + rect.height * 0.5;
+  joyMaxR = rect.width * 0.34;
+  updateJoyFromEvent(e);
+});
+joyZone.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== joyPointerId) return;
+  updateJoyFromEvent(e);
+});
+const resetJoy = (e) => {
+  if (e.pointerId !== joyPointerId) return;
+  joyPointerId = null;
+  joyX = 0; joyY = 0; lastBackTurnSign = 0;
+  updateJoyVisual();
+};
+joyZone.addEventListener('pointerup', resetJoy);
+joyZone.addEventListener('pointercancel', resetJoy);
+
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  roar.unlock();
+  if (e.repeat) return;
+  keys[e.code] = true;
+  if (e.code === 'KeyR') setRunToggle(!runToggle);
+  if (e.code === 'Space' || e.code === 'KeyE') { e.preventDefault(); triggerAttackAction(); }
+  if (e.code === 'KeyQ' || e.code === 'KeyF') triggerScreamAction();
+  if (e.code === 'KeyV') togglePov();
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+function getInputState() {
+  let forward = 0, turn = 0;
+  const r = Math.hypot(joyX, joyY);
+  const DEAD = 0.11;
+  if (r > DEAD) {
+    const mag = clamp((r - DEAD) / (1 - DEAD), 0, 1);
+    if (joyY >= -0.22) {
+      lastBackTurnSign = 0;
+      forward = joyY > 0 ? mag * smoothstep(0.0, 0.35, joyY / r) : 0;
+      turn = Math.abs(joyX) > 0.08 ? -joyX : 0;
+    } else {
+      if (Math.abs(joyX) > 0.16) lastBackTurnSign = -Math.sign(joyX);
+      else if (!lastBackTurnSign) lastBackTurnSign = -1;
+      turn = lastBackTurnSign * mag;
+    }
+  } else {
+    lastBackTurnSign = 0;
+  }
+
+  const kFwd = (keys.KeyW || keys.ArrowUp) ? 1 : 0;
+  const kBack = (keys.KeyS || keys.ArrowDown) ? 1 : 0;
+  const kLeft = (keys.KeyA || keys.ArrowLeft) ? 1 : 0;
+  const kRight = (keys.KeyD || keys.ArrowRight) ? 1 : 0;
+  if (kFwd) forward = Math.max(forward, 1);
+  if (kLeft || kRight) turn = clamp(turn + (kLeft - kRight), -1, 1);
+  else if (kBack && forward === 0 && turn === 0) turn = -1;
+
+  const run = runToggle || Boolean(keys.ShiftLeft || keys.ShiftRight);
+  return { forward, turn, run, bounds: MAP_HALF - 8 };
+}
+
+let camOrbitYaw = 0, camOrbitPitch = 0.30, camDist = 7.4;
+let dragPointerId = null, dragLastX = 0, dragLastY = 0, camSnap = true;
+const activePointers = new Map();
+let pinchLastDist = 0;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  roar.unlock();
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (activePointers.size === 1) {
+    dragPointerId = e.pointerId;
+    dragLastX = e.clientX;
+    dragLastY = e.clientY;
+  } else if (activePointers.size === 2) {
+    dragPointerId = null;
+    const pts = [...activePointers.values()];
+    pinchLastDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+});
+window.addEventListener('pointermove', (e) => {
+  if (activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+  if (activePointers.size === 2 && povMode === '3rd') {
+    const pts = [...activePointers.values()];
+    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (pinchLastDist > 0) camDist = clamp(camDist - (dist - pinchLastDist) * 0.02, 4.2, 14.0);
+    pinchLastDist = dist;
+    return;
+  }
+  if (e.pointerId !== dragPointerId) return;
+  const dx = e.clientX - dragLastX;
+  const dy = e.clientY - dragLastY;
+  dragLastX = e.clientX;
+  dragLastY = e.clientY;
+  if (povMode === '3rd') {
+    camOrbitYaw -= dx * 0.0055;
+    camOrbitPitch = clamp(camOrbitPitch + dy * 0.0045, 0.10, 1.05);
+  } else {
+    camOrbitYaw = clamp(camOrbitYaw - dx * 0.0045, -0.95, 0.95);
+    camOrbitPitch = clamp(camOrbitPitch - dy * 0.0038, -0.55, 0.45);
+  }
+});
+const endDrag = (e) => {
+  activePointers.delete(e.pointerId);
+  if (e.pointerId === dragPointerId) dragPointerId = null;
+  if (activePointers.size < 2) pinchLastDist = 0;
+};
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+
+renderer.domElement.addEventListener('wheel', (e) => {
+  if (povMode !== '3rd') return;
+  e.preventDefault();
+  camDist = clamp(camDist + e.deltaY * 0.005, 4.2, 14.0);
+}, { passive: false });
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+const smoothCamPos = new THREE.Vector3(0, 3.2, -7.4);
+const smoothCamTarget = new THREE.Vector3(0, 1.5, 1.4);
+const smoothCamUp = new THREE.Vector3(0, 1, 0);
+const desiredPos = new THREE.Vector3();
+const desiredTarget = new THREE.Vector3();
+const desiredUp = new THREE.Vector3();
+const worldUp = new THREE.Vector3(0, 1, 0);
+const fpLocalOrigin = new THREE.Vector3(0, 0.27, 0.44);
+const fpLocalLook = new THREE.Vector3();
+const fpPeekDir = new THREE.Vector3();
+
+function updateCamera(dt, input) {
+  const mPos = skullcrawler.group.position;
+  const yaw = skullcrawler.facingYaw;
+  const speedRatio = skullcrawler.runBlend * skullcrawler.moveBlend;
+
+  if (povMode === '3rd') {
+    if (dragPointerId === null && (input.forward > 0.08 || Math.abs(input.turn) > 0.08)) {
+      camOrbitYaw *= Math.exp(-2.8 * dt);
+    }
+    const asp = window.innerWidth / window.innerHeight;
+    const baseFov = asp < 1 ? clamp(50 / Math.pow(asp, 0.35), 50, 68) : 50;
+    const targetFov = baseFov + 6.0 * speedRatio;
+
+    desiredTarget.set(
+      mPos.x + Math.sin(yaw) * 1.45,
+      mPos.y + 1.50,
+      mPos.z + Math.cos(yaw) * 1.45
+    );
+    const viewYaw = yaw + camOrbitYaw;
+    const cPitch = Math.cos(camOrbitPitch);
+    desiredPos.set(
+      desiredTarget.x - Math.sin(viewYaw) * cPitch * camDist,
+      Math.max(0.45, desiredTarget.y + Math.sin(camOrbitPitch) * camDist),
+      desiredTarget.z - Math.cos(viewYaw) * cPitch * camDist
+    );
+
+    if (camSnap) {
+      camera.fov = targetFov;
+      camera.updateProjectionMatrix();
+      smoothCamPos.copy(desiredPos);
+      smoothCamTarget.copy(desiredTarget);
+      smoothCamUp.copy(worldUp);
+      camSnap = false;
+    } else {
+      if (Math.abs(camera.fov - targetFov) > 0.02) {
+        camera.fov = lerp(camera.fov, targetFov, 1 - Math.exp(-6 * dt));
+        camera.updateProjectionMatrix();
+      }
+      smoothCamTarget.lerp(desiredTarget, 1 - Math.exp(-11 * dt));
+      smoothCamPos.lerp(desiredPos, 1 - Math.exp(-8.5 * dt));
+      smoothCamUp.lerp(worldUp, 1 - Math.exp(-10 * dt)).normalize();
+    }
+  } else {
+    if (dragPointerId === null) {
+      camOrbitYaw *= Math.exp(-3.5 * dt);
+      camOrbitPitch = lerp(camOrbitPitch, -0.03, 1 - Math.exp(-3.5 * dt));
+    }
+    const targetFov = 68 + 5.0 * speedRatio;
+    const headMat = skullcrawler.bones.headBase.matrixWorld;
+    desiredPos.copy(fpLocalOrigin).applyMatrix4(headMat);
+    fpPeekDir.set(
+      Math.sin(camOrbitYaw) * Math.cos(camOrbitPitch),
+      Math.sin(camOrbitPitch),
+      Math.cos(camOrbitYaw) * Math.cos(camOrbitPitch)
+    );
+    fpLocalLook.copy(fpLocalOrigin).addScaledVector(fpPeekDir, 3.2);
+    desiredTarget.copy(fpLocalLook).applyMatrix4(headMat);
+    desiredUp.set(0, 1, 0).transformDirection(headMat).lerp(worldUp, 0.35).normalize();
+
+    if (camSnap) {
+      camera.fov = targetFov;
+      camera.updateProjectionMatrix();
+      smoothCamPos.copy(desiredPos);
+      smoothCamTarget.copy(desiredTarget);
+      smoothCamUp.copy(desiredUp);
+      camSnap = false;
+    } else {
+      if (Math.abs(camera.fov - targetFov) > 0.02) {
+        camera.fov = lerp(camera.fov, targetFov, 1 - Math.exp(-6 * dt));
+        camera.updateProjectionMatrix();
+      }
+      smoothCamPos.lerp(desiredPos, 1 - Math.exp(-26 * dt));
+      smoothCamTarget.lerp(desiredTarget, 1 - Math.exp(-20 * dt));
+      smoothCamUp.lerp(desiredUp, 1 - Math.exp(-14 * dt)).normalize();
+    }
+  }
+
+  camera.position.copy(smoothCamPos);
+  camera.up.copy(smoothCamUp);
+  camera.lookAt(smoothCamTarget);
+  skyDome.position.copy(camera.position);
+}
+
+const texelSize = (SHADOW_RANGE * 2) / SHADOW_RES;
+function updateShadowLight() {
+  const sx = Math.round(skullcrawler.group.position.x / texelSize) * texelSize;
+  const sz = Math.round(skullcrawler.group.position.z / texelSize) * texelSize;
+  sun.target.position.set(sx, 0, sz);
+  sun.position.set(sx + sunOffset.x, sunOffset.y, sz + sunOffset.z);
+}
+
+let last = performance.now();
+(function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+
+  const input = getInputState();
+  skullcrawler.update(dt, input);
+  updateShadowLight();
+  updateCamera(dt, input);
+  renderer.render(scene, camera);
+})(last);
+</script>
+</body>
+</html>
